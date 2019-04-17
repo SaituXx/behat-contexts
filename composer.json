@@ -1,0 +1,20 @@
+{
+    "name": "metadrop/behat-contexts",
+    "description": "Contexts that we use with Behat 3.x tests on Drupal sites.",
+    "type": "library",
+    "require": {
+        "nuvoleweb/drupal-behat": "dev-master"
+    },
+    "authors": [
+        {
+            "name": "Metadrop",
+            "email": "hi@metadrop.net"
+        }
+    ],
+    "autoload": {
+      "psr-4": {
+        "Metadrop\\": "./src/"
+      }
+    },
+    "minimum-stability": "dev"
+}
