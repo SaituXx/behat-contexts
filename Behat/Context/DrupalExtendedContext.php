@@ -12,6 +12,7 @@ namespace Metadrop\Behat\Context;
 use Behat\Behat\Context\SnippetAcceptingContext;
 use Behat\Gherkin\Node\TableNode;
 use Drupal\DrupalExtension\Context\RawDrupalContext;
+use Drupal\paragraphs\Entity\Paragraph;
 
 class DrupalExtendedContext extends RawDrupalContext implements SnippetAcceptingContext {
 
@@ -105,6 +106,24 @@ class DrupalExtendedContext extends RawDrupalContext implements SnippetAccepting
     elysia_cron_run_job($job, TRUE, TRUE, TRUE);
   }
 
+/**
+ * @Given I run the cron of Search API
+ *
+ * Run search-api-cron
+ */
+public function iRunTheCronOfSearchApi() {
+  search_api_cron();
+}
+
+/**
+ * @Given I run the cron of Search API Solr
+ *
+ * Run search-api-solr-cron
+ */
+public function iRunTheCronOfSearchApiSolr() {
+  search_api_solr_cron();
+}
+
   /**
    * Gets user property by name.
    *
@@ -163,7 +182,8 @@ class DrupalExtendedContext extends RawDrupalContext implements SnippetAccepting
    */
   public function userRoleCheck($role, $user = NULL, $not = FALSE) {
     if (empty($user)) {
-      $account = $this->user;
+      $current_user = $this->getUserManager()->getCurrentUser();
+      $account = user_load($current_user->uid);
     }
     else {
       $condition = $this->getUserPropertyByName($user);
@@ -252,12 +272,11 @@ class DrupalExtendedContext extends RawDrupalContext implements SnippetAccepting
 
     $info = entity_get_info($entity_type);
     $id_key = $info['entity keys']['id'];
-    $bundle_key = $info['entity keys']['bundle'];
 
     $query = new \EntityFieldQuery();
     $query->entityCondition('entity_type', $entity_type);
     if ($bundle) {
-      $query->entityCondition($bundle_key, $bundle);
+      $query->entityCondition('bundle', $bundle);
     }
 
     $query->propertyOrderBy($id_key, 'DESC');
@@ -273,6 +292,30 @@ class DrupalExtendedContext extends RawDrupalContext implements SnippetAccepting
     }
 
     return $id;
+  }
+
+  /**
+   * Discovers last entity id created of type.
+   */
+  public function getLastEntityIdD8($entity_type, $bundle = NULL) {
+
+    $info = \Drupal::entityTypeManager()->getDefinition($entity_type);
+    $id_key = $info->getKey('id');
+    $bundle_key = $info->getKey('bundle');
+
+    $query = \Drupal::entityQuery($entity_type);
+    if ($bundle) {
+      $query->condition($bundle_key, $bundle);
+    }
+    $query->sort($id_key, 'DESC');
+    $query->range(0, 1);
+    $query->addMetaData('account', user_load(1));
+    $results = $query->execute();
+
+    if (!empty($results)) {
+      $id = reset($results);
+      return $id;
+    }
   }
 
   /**
@@ -337,7 +380,7 @@ class DrupalExtendedContext extends RawDrupalContext implements SnippetAccepting
     foreach ($nodesTable->getHash() as $nodeHash) {
       $node = (object) $nodeHash;
       $node->type = $type;
-      $node->uid  = $this->user->uid;
+      $node->uid  = $this->getUserManager()->getCurrentUser()->uid;
       $this->nodeCreate($node);
     }
   }
@@ -428,5 +471,167 @@ class DrupalExtendedContext extends RawDrupalContext implements SnippetAccepting
   public function iWaitForTheBatchJobToFinish($seconds = 5) {
     $this->getSession()->wait($seconds * 1000, 'jQuery("#updateprogress").length === 0');
    }
+
+  /**
+   * Check param with value in url.
+   *
+   * @Then current url should have the ":param" param with ":value" value
+   */
+  public function urlShouldHaveParamWithValue($param, $value, $have = TRUE) {
+    $url = $this->getSession()->getCurrentUrl();
+    $queries = [];
+    parse_str(parse_url($url, PHP_URL_QUERY), $queries);
+    if (!(isset($queries[$param]) && $queries[$param] == $value) && $have) {
+      throw new \Exception("The param " . $param . " with value " . $value . " is not in the url");
+    }
+    elseif (isset($queries[$param]) && $queries[$param] == $value && !$have) {
+      throw new \Exception("The param " . $param . " with value " . $value . " is in the url");
+    }
+  }
+
+  /**
+   * Check param with value in url not exists.
+   *
+   * @Then current url should not have the ":param" param with ":value" value
+   */
+  public function urlShouldNotHaveParamWithValue($param, $value) {
+    $this->urlShouldHaveParamWithValue($param, $value, FALSE);
+  }
+
+   /**
+    * Check that user with mail exists.
+    *
+    * @Then user with mail :mail exists
+    */
+   public function userWithMailExists($mail, $exists = TRUE) {
+     $user = user_load_by_mail($mail);
+     if (!$user && $exists) {
+       throw new \Exception("The user with mail '" . $mail . "' was not found.");
+     }
+     elseif (!empty($user) && !$exists) {
+       throw new \Exception("The user with mail '" . $mail . "' exists.");
+     }
+   }
+
+   /**
+    * Check that user with mail not exists.
+    *
+    * @Then user with mail :mail not exists
+    */
+   public function userWithMailNotExists($mail) {
+     $this->userWithMailExists($mail, FALSE);
+   }
+
+  /**
+   * Get core handler.
+   *
+   * This allow use functions to create commerce entities like 'Given content'
+   * steps makes.
+   *
+   * @return \Drupal\Driver\Cores\CoreInterface
+   *   Core handler for current core.
+   */
+  public function getCore() {
+    return $this->getDriver()->getCore();
+  }
+
+  /**
+   * Overrides \Drupal\Driver\Cores\AbstractCore::expandEntityFields method.
+   *
+   * That method is protected and we can't use it from this context.
+   */
+  protected function expandEntityFields($entity_type, \stdClass $entity) {
+    $field_types = $this->getCore()->getEntityFieldTypes($entity_type);
+    foreach ($field_types as $field_name => $type) {
+      if (isset($entity->$field_name)) {
+        $entity->$field_name = $this->getCore()->getFieldHandler($entity, $entity_type, $field_name)
+          ->expand($entity->$field_name);
+      }
+    }
+  }
+
+  /**
+   * Checks that text appears before another text.
+   *
+   * Example:
+   * I should see "Element 1" text before "Element 2" in the "content" region.
+   *
+   * @param string $first_text
+   *   First text.
+   * @param string $second_text
+   *   Second text.
+   * @param string $region
+   *   Region.
+   *
+   * @Then I should see :text1 text before :text2
+   * @Then I should see :text1 text before :text2 in the :region region
+   */
+  public function iShouldSeeTextBefore($first_text, $second_text, $region = NULL) {
+    // Take sesion & page.
+    $session = $this->getSession();
+    if (isset($region)) {
+      $page = $session->getPage()->find('region', $region);
+    }
+    else {
+      $page = $session->getPage();
+    }
+
+    $xpath = "//*[contains(*, '$second_text')]/preceding::*[contains(*, '$first_text')]";
+    $element = $page->find('xpath', $xpath);
+    // Check.
+    if ($element === NULL) {
+      throw new \Exception("The text $first_text is not being seen before $second_text");
+    }
+  }
+
+  /**
+   * Create a paragraph and reference it in the given field of the last node created.
+   *
+   * Only works in drupal 8.
+   * You can only create several paragraphs of the same type at once.
+   * To add other types you must do so in different steps.
+   *
+   * Example:
+   * Given paragraph of "paragraph_type" type referenced on the "field_paragraph" field of the last content:
+   *  | title                  | field_body        |
+   *  | Behat paragraph        | behat body        |
+   *  | Behat paragraph Second | behat second body |
+   *
+   * Given paragraph of "paragraph_type_second" type referenced on the "field_paragraph" field of the last content:
+   *  | title                  | field_text        |
+   *  | Behat paragraph        | behat text        |
+   *  | Behat paragraph Second | behat second text |
+   *
+   * @param string $paragraph_type
+   *   Paragraph type.
+   * @param string $field_paragraph
+   *   Field to reference the paragrapshs.
+   * @param \Behat\Gherkin\Node\TableNode $paragraph_fields_table
+   *   Paragraph fields.
+   *
+   * @Given paragraph of :paragraph_type type referenced on the :field_paragraph field of the last content:
+   */
+  public function createParagraph($paragraph_type, $field_paragraph, TableNode $paragraph_fields_table) {
+    $entity_type = 'node';
+    $last_id = $this->getLastEntityIdD8($entity_type);
+    if (empty($last_id)) {
+      throw new \Exception("Impossible to get the last content id.");
+    }
+
+    $controller = \Drupal::entityManager()->getStorage($entity_type);
+    $entity = $controller->load($last_id);
+
+    // Create multiple paragraphs.
+    foreach ($paragraph_fields_table->getHash() as $paragraph_data) {
+      $paragraph_object = (object) $paragraph_data;
+      $paragraph_object->type = $paragraph_type;
+      $this->parseEntityFields('paragraph', $paragraph_object);
+      $this->expandEntityFields('paragraph', $paragraph_object);
+      $paragraph = Paragraph::create((array) $paragraph_object);
+      $paragraph->save();
+      $entity->get($field_paragraph)->appendItem($paragraph);
+    }
+    $entity->save();
+  }
 
 }
